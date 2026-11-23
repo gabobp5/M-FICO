@@ -1,25 +1,204 @@
-/* MAFICO Sync - OAuth privado y Apps Script API. Sin tokens persistentes. */
+/* MAFICO Sync - Conexión directa y simple sin Google Cloud */
 (()=>{'use strict';
-const CONF_KEY='mafico_google_config_v1';const APP_KEY='mafico_business_v1';
+const CONF_KEY='mafico_simple_url_v1';
+const APP_KEY='mafico_business_v1';
 const $=id=>document.getElementById(id);
-let token='', tokenExpires=0,tokenClient=null,attached=null,connected=false,revision=0,cloudData='',dirty=false,conflict=false,busy=false,changedWhileBusy=false,pushTimer=0,checking=false;
+
+let attached=null, connected=false, revision=0, cloudData='', dirty=false, conflict=false, busy=false, changedWhileBusy=false, pushTimer=0, checking=false;
 let config=(()=>{try{return JSON.parse(localStorage.getItem(CONF_KEY))||{}}catch{return {}}})();
-const notify=(msg,state='neutral')=>{const el=$('cloudStatus');if(el){el.textContent=msg;el.dataset.state=state}const indicator=$('syncSummary');if(indicator){indicator.textContent=(state==='success'?'☁ Sincronizado':state==='error'?'⚠ Error de sincronización':state==='warning'?'◷ Sincronización pendiente':'☁ Sin conectar');indicator.title=msg;indicator.dataset.state=state}};
-function initUI(){if(!$('googleClientId'))return;$('googleClientId').value=config.clientId||'';$('googleScriptId').value=config.scriptId||'';notify('Sin conectar · tus cambios se guardan solamente en este dispositivo.');$('cloudConnect').onclick=connect;$('cloudLoad').onclick=loadCloud;$('cloudUpload').onclick=uploadLocal;$('cloudDisconnect').onclick=disconnect;window.addEventListener('online',()=>{if(connected&&dirty)queuePush();else if(connected)checkCloud()});window.addEventListener('focus',()=>{if(connected&&!dirty)checkCloud()});setInterval(()=>{if(connected&&!dirty&&document.visibilityState==='visible')checkCloud()},30000)}
-function storeConfig(){config={clientId:$('googleClientId').value.trim(),scriptId:$('googleScriptId').value.trim()};localStorage.setItem(CONF_KEY,JSON.stringify(config))}
-function ensureGoogleLibrary(){return new Promise((resolve,reject)=>{if(window.google?.accounts?.oauth2)return resolve();let n=0;const t=setInterval(()=>{if(window.google?.accounts?.oauth2){clearInterval(t);resolve()}else if(++n>50){clearInterval(t);reject(Error('No se pudo cargar Google Identity. Comprueba la conexión a Internet.'))}},100)})}
-async function connect(){try{storeConfig();if(!config.clientId.includes('.apps.googleusercontent.com')||!config.scriptId)throw Error('Completa el ID OAuth y el ID del proyecto Apps Script.');if(location.protocol==='file:')throw Error('Para conectar Google primero publica la PWA en HTTPS.');await ensureGoogleLibrary();notify('Abriendo inicio de sesión de Google…');token=await new Promise((resolve,reject)=>{tokenClient=google.accounts.oauth2.initTokenClient({client_id:config.clientId,scope:'https://www.googleapis.com/auth/spreadsheets',callback:r=>{if(r.error)reject(Error(r.error));else{tokenExpires=Date.now()+(r.expires_in||3000)*1000;resolve(r.access_token)}}});tokenClient.requestAccessToken({prompt:'consent'})});connected=true;setButtons();notify('Conectado. Revisando la hoja de Google…');await checkCloud(true)}catch(e){connected=false;setButtons();notify('Conexión fallida: '+e.message,'error')}}
-function setButtons(){$('cloudLoad').disabled=!connected;$('cloudUpload').disabled=!connected;$('cloudDisconnect').disabled=!connected;$('cloudConnect').disabled=connected}
-function disconnect(){const oldToken=token;connected=false;token='';tokenExpires=0;revision=0;cloudData='';dirty=false;conflict=false;if(window.google?.accounts?.oauth2&&oldToken)google.accounts.oauth2.revoke(oldToken,()=>{});setButtons();notify('Desconectado · datos locales conservados.')}
-async function rpc(functionName,parameters=[]){if(!connected||!token)throw Error('Conecta tu cuenta de Google primero.');if(Date.now()>tokenExpires-120000){connected=false;setButtons();throw Error('La sesión caducó. Vuelve a iniciar sesión en Google.')}const r=await fetch('https://script.googleapis.com/v1/scripts/'+encodeURIComponent(config.scriptId)+':run',{method:'POST',headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({function:functionName,parameters,devMode:false})});const body=await r.json();if(!r.ok)throw Error(body.error?.message||'Error HTTP '+r.status);if(body.error)throw Error(body.error.details?.[0]?.errorMessage||body.error.message||'Error del Apps Script');return body.response?.result}
-function normalize(x){const o=x||{};return ['products','clients','sales','expenses','packs','gifts','costBatches'].every(k=>Array.isArray(o[k]))}
-function localData(){return attached?.getData()||JSON.parse(localStorage.getItem(APP_KEY)||'{}')}
-function hasEntries(d){return Object.values(d||{}).some(x=>Array.isArray(x)&&x.length>0)}
-function statusAfterRead(remote){cloudData=remote.data||'';revision=remote.revision||0;const current=JSON.stringify(localData());if(remote.revision===0){notify(hasEntries(localData())?'La nube está vacía. Usa «Subir mis datos» para crear su primera copia.':'Nube vacía: registra datos y pulsa «Subir mis datos» para comenzar.','warning');return}if(remote.data===current){dirty=false;conflict=false;notify('Sincronizado con Google Sheets · revisión '+revision,'success');return}if(!hasEntries(localData())){notify('Hay datos en la nube. Pulsa «Cargar nube» para traerlos a este dispositivo.','warning');return}notify('Hay datos diferentes en este dispositivo y en la nube. Haz un respaldo y elige cuál conservar.','warning')}
-async function checkCloud(initial=false){if(!connected||checking||busy||dirty)return;checking=true;try{const remote=await rpc('maficoRead');if(initial){statusAfterRead(remote)}else if(remote.revision!==revision){if(!hasEntries(localData())&&remote.data){cloudData=remote.data;revision=remote.revision;notify('Hay cambios nuevos en la nube. Pulsa «Cargar nube».','warning')}else{cloudData=remote.data;revision=remote.revision;notify('Hay cambios de otro dispositivo. Pulsa «Cargar nube» antes de editar.','warning');conflict=true}}else if(!conflict)notify('Sincronizado con Google Sheets · revisión '+revision,'success')}catch(e){notify('No se pudo leer la nube: '+e.message,'error')}finally{checking=false}}
-function changed(){if(!connected)return;dirty=true;changedWhileBusy=true;notify('Cambios locales pendientes de sincronizar…','warning');clearTimeout(pushTimer);pushTimer=setTimeout(queuePush,900)}
-async function queuePush(){if(!connected||!dirty||busy||conflict)return;busy=true;changedWhileBusy=false;const payload=JSON.stringify(localData());try{if(revision===0&&!cloudData){notify('Para iniciar la sincronización, usa «Subir mis datos» una sola vez.','warning');return}const res=await rpc('maficoWrite',[revision,payload]);if(res?.conflict){conflict=true;notify('Conflicto: alguien cambió la nube. Descarga un respaldo y pulsa «Cargar nube» tras revisar. No se sobrescribió la nube.','error');return}revision=res.revision;cloudData=payload;dirty=changedWhileBusy;if(!dirty)notify('Todos los cambios guardados en Google Sheets ✓','success');}catch(e){notify('No sincronizado: '+e.message+' · tus cambios siguen en este dispositivo.','error')}finally{busy=false;if(dirty&&!conflict&&connected&&revision>0)setTimeout(queuePush,2500)}}
-async function loadCloud(){if(!connected)return;try{const result=await rpc('maficoRead');if(!result.data){notify('La nube está vacía.','warning');return}const obj=JSON.parse(result.data);if(!normalize(obj))throw Error('Los datos de la nube no tienen el formato esperado.');if(!confirm('Se reemplazarán los datos de ESTE dispositivo por los de Google Sheets. Descarga antes un respaldo si tienes cambios locales. ¿Continuar?'))return;attached.replaceData(obj);revision=result.revision;cloudData=result.data;conflict=false;dirty=false;notify('Datos de Google Sheets cargados correctamente ✓','success')}catch(e){notify('No fue posible cargar datos: '+e.message,'error')}}
-async function uploadLocal(){if(!connected||busy)return;if(!confirm('Vas a enviar los registros de ESTE dispositivo a Google Sheets. Solo se permitirá si la nube no ha cambiado. ¿Continuar?'))return;busy=true;try{const latest=await rpc('maficoRead');if(latest.revision&&latest.data!==JSON.stringify(localData())){cloudData=latest.data;revision=latest.revision;conflict=true;notify('La nube ya tiene información distinta. No la sobrescribimos. Guarda un respaldo y usa «Cargar nube» para revisarla.','error');return}revision=latest.revision;const payload=JSON.stringify(localData());const res=await rpc('maficoWrite',[revision,payload]);if(res?.conflict)throw Error('Conflicto de edición: otra sesión modificó la nube.');revision=res.revision;cloudData=payload;dirty=false;conflict=false;notify('Primera copia guardada en Google Sheets ✓','success')}catch(e){notify('No se pudo subir: '+e.message,'error')}finally{busy=false}}
+
+const notify=(msg,state='neutral')=>{
+  const el=$('cloudStatus');
+  if(el){el.textContent=msg;el.dataset.state=state}
+  const indicator=$('syncSummary');
+  if(indicator){
+    indicator.textContent=(state==='success'?'☁ Sincronizado':state==='error'?'⚠ Error':state==='warning'?'◷ Pendiente':'☁ Sin conectar');
+    indicator.title=msg;
+    indicator.dataset.state=state;
+  }
+};
+
+function getUrl(){
+  const a=$('googleScriptId'), b=$('googleClientId'), c=$('webAppUrl');
+  return ((a&&a.value)||(b&&b.value)||(c&&c.value)||config.url||'').trim();
+}
+
+function initUI(){
+  if($('googleClientId'))$('googleClientId').placeholder='No hace falta llenar esto';
+  if($('googleScriptId')){
+    $('googleScriptId').placeholder='Pega aquí tu enlace de Google (https://script.google.com/...)';
+    $('googleScriptId').value=config.url||'';
+  }
+  notify('Sin conectar · tus cambios se guardan solo aquí.');
+  if($('cloudConnect'))$('cloudConnect').onclick=connect;
+  if($('cloudLoad'))$('cloudLoad').onclick=loadCloud;
+  if($('cloudUpload'))$('cloudUpload').onclick=uploadLocal;
+  if($('cloudDisconnect'))$('cloudDisconnect').onclick=disconnect;
+  window.addEventListener('online',()=>{if(connected&&dirty)queuePush();else if(connected)checkCloud()});
+  window.addEventListener('focus',()=>{if(connected&&!dirty)checkCloud()});
+  setInterval(()=>{if(connected&&!dirty&&document.visibilityState==='visible')checkCloud()},30000);
+  if(config.url)connect();
+}
+
+function storeConfig(){
+  config={url:getUrl()};
+  localStorage.setItem(CONF_KEY,JSON.stringify(config));
+}
+
+async function apiCall(payload){
+  if(!config.url||!config.url.startsWith('https://script.google.com/'))throw Error('Pega el enlace correcto de Google que termina en /exec');
+  const res=await fetch(config.url,{
+    method:'POST',
+    headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body:JSON.stringify(payload)
+  });
+  const data=await res.json();
+  if(!res.ok||data?.error)throw Error(data?.error||'Error conectando con Google.');
+  return data;
+}
+
+async function connect(){
+  try{
+    storeConfig();
+    if(!config.url)throw Error('Falta pegar el enlace de Google.');
+    connected=true;
+    setButtons();
+    notify('Conectando con tu hoja de Google…');
+    await checkCloud(true);
+  }catch(e){
+    connected=false;
+    setButtons();
+    notify('Error: '+e.message,'error');
+  }
+}
+
+function setButtons(){
+  if($('cloudLoad'))$('cloudLoad').disabled=!connected;
+  if($('cloudUpload'))$('cloudUpload').disabled=!connected;
+  if($('cloudDisconnect'))$('cloudDisconnect').disabled=!connected;
+  if($('cloudConnect'))$('cloudConnect').disabled=connected;
+}
+
+function disconnect(){
+  connected=false;revision=0;cloudData='';dirty=false;conflict=false;
+  localStorage.removeItem(CONF_KEY);
+  setButtons();
+  notify('Desconectado · datos locales conservados.');
+}
+
+function normalize(x){
+  const o=x||{};
+  return ['products','clients','sales','expenses','packs','gifts','costBatches'].every(k=>Array.isArray(o[k]));
+}
+
+function localData(){
+  return attached?.getData()||JSON.parse(localStorage.getItem(APP_KEY)||'{}');
+}
+
+function hasEntries(d){
+  return Object.values(d||{}).some(x=>Array.isArray(x)&&x.length>0);
+}
+
+function statusAfterRead(remote){
+  cloudData=remote.data||'';
+  revision=remote.revision||0;
+  const current=JSON.stringify(localData());
+  if(remote.revision===0){
+    notify(hasEntries(localData())?'La hoja está vacía. Pulsa «Subir mis datos» para guardar por primera vez.':'Hoja vacía: registra algo y pulsa «Subir mis datos».','warning');
+    return;
+  }
+  if(remote.data===current){dirty=false;conflict=false;notify('Sincronizado ✓','success');return}
+  if(!hasEntries(localData())){notify('Hay datos en Google. Pulsa «Cargar nube» para traerlos aquí.','warning');return}
+  notify('Hay datos distintos aquí y en Google. Elige «Subir mis datos» o «Cargar nube».','warning');
+}
+
+async function checkCloud(initial=false){
+  if(!connected||checking||busy||dirty)return;
+  checking=true;
+  try{
+    const remote=await apiCall({action:'read'});
+    if(initial){statusAfterRead(remote)}
+    else if(remote.revision!==revision){
+      cloudData=remote.data;revision=remote.revision;
+      notify('Hay cambios nuevos desde otro dispositivo. Pulsa «Cargar nube».','warning');
+      conflict=true;
+    }else if(!conflict){
+      notify('Sincronizado ✓','success');
+    }
+  }catch(e){
+    notify('Error leyendo Google: '+e.message,'error');
+  }finally{
+    checking=false;
+  }
+}
+
+function changed(){
+  if(!connected)return;
+  dirty=true;changedWhileBusy=true;
+  notify('Guardando en Google…','warning');
+  clearTimeout(pushTimer);
+  pushTimer=setTimeout(queuePush,900);
+}
+
+async function queuePush(){
+  if(!connected||!dirty||busy||conflict)return;
+  busy=true;changedWhileBusy=false;
+  const payload=JSON.stringify(localData());
+  try{
+    if(revision===0&&!cloudData){
+      notify('Pulsa «Subir mis datos» una vez para iniciar la copia en Google.','warning');
+      return;
+    }
+    const res=await apiCall({action:'write',baseRevision:revision,json:payload});
+    if(res?.conflict){
+      conflict=true;
+      notify('Conflicto: se editó desde otro dispositivo. Pulsa «Cargar nube».','error');
+      return;
+    }
+    revision=res.revision;cloudData=payload;dirty=changedWhileBusy;
+    if(!dirty)notify('Guardado en Google ✓','success');
+  }catch(e){
+    notify('No se pudo guardar: '+e.message,'error');
+  }finally{
+    busy=false;
+    if(dirty&&!conflict&&connected&&revision>0)setTimeout(queuePush,2500);
+  }
+}
+
+async function loadCloud(){
+  if(!connected)return;
+  try{
+    const result=await apiCall({action:'read'});
+    if(!result.data){notify('La hoja está vacía.','warning');return}
+    const obj=JSON.parse(result.data);
+    if(!normalize(obj))throw Error('Formato de datos no válido.');
+    if(!confirm('Se reemplazarán los datos de ESTE dispositivo por los de Google Sheets. ¿Continuar?'))return;
+    attached.replaceData(obj);
+    revision=result.revision;cloudData=result.data;conflict=false;dirty=false;
+    notify('Datos descargados de Google ✓','success');
+  }catch(e){
+    notify('Error al descargar: '+e.message,'error');
+  }
+}
+
+async function uploadLocal(){
+  if(!connected||busy)return;
+  if(!confirm('Se subirán los datos de ESTE dispositivo a Google Sheets. ¿Continuar?'))return;
+  busy=true;
+  try{
+    const latest=await apiCall({action:'read'});
+    revision=latest.revision||0;
+    const payload=JSON.stringify(localData());
+    const res=await apiCall({action:'write',baseRevision:revision,json:payload});
+    if(res?.conflict)throw Error('Alguien más modificó la hoja al mismo tiempo.');
+    revision=res.revision;cloudData=payload;dirty=false;conflict=false;
+    notify('Datos subidos a Google ✓','success');
+  }catch(e){
+    notify('Error al subir: '+e.message,'error');
+  }finally{
+    busy=false;
+  }
+}
+
 window.MaficoCloud={attach(api){attached=api;initUI()},changed};
 })();
