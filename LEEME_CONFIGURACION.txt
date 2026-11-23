@@ -1,0 +1,38 @@
+MAFICO Business Studio — PWA + Google Sheets privado (inicio de instalación)
+
+IMPORTANTE: se entregan los archivos y la conexión programada; NO está publicada ni conectada a tu Google todavía. No uses datos reales sin completar pruebas y respaldos.
+
+PASO 0. RESPALDO ANTERIOR
+En la versión HTML actual, abre Ajustes > Descargar respaldo completo JSON. Guárdalo fuera del navegador. Cuando abras la PWA en una URL https, importa ese JSON en Ajustes. El almacenamiento de file:// NO se transfiere solo al dominio web.
+
+PASO 1. ALOJAMIENTO HTTPS
+Publica TODO el contenido de esta carpeta, sin eliminar ningún archivo, en hosting estático HTTPS (por ejemplo, GitHub Pages, Cloudflare Pages o Netlify con plan apto para el uso). La PWA necesita manifest.webmanifest, sw.js, iconos y cloud.js en la misma carpeta que index.html. La opción de instalación depende del navegador. No abras el archivo desde file:// para la conexión Google.
+
+PASO 2. GOOGLE SHEETS
+Crea una hoja de Google Sheets privada para tu cuenta. Copia el ID de su URL (parte entre /d/ y /edit). NO compartas la hoja públicamente.
+
+PASO 3. GOOGLE CLOUD
+En https://console.cloud.google.com crea un proyecto Google Cloud STANDARD. Activa Google Apps Script API. Configura Google Auth Platform / pantalla de consentimiento, tipo Externo en modo pruebas, y agrega tu correo como usuario de prueba. Crea una credencial OAuth 2.0 de tipo «Aplicación web» y añade como Origen JavaScript autorizado el origen EXACTO de tu web publicada (ej.: https://usuario.github.io, sin ruta). Copia Client ID. No necesitas client secret en el navegador.
+
+PASO 4. GOOGLE APPS SCRIPT
+En https://script.google.com crea un proyecto. Reemplaza Code.gs con el archivo incluido y cambia MAFICO_SHEET_ID por el ID de tu hoja. Activa «Mostrar appsscript.json» en Configuración y pega el manifiesto incluido, o revisa sus scopes y acceso antes de reemplazarlo. En Configuración > Proyecto de Google Cloud cambia el proyecto predeterminado por el MISMO proyecto STANDARD del paso 3. Puede requerir autorizar y configurar la pantalla de consentimiento. Despliega como «Ejecutable de API / API executable», solo para tu usuario («Only myself»). Copia Script ID desde Configuración del proyecto, no el Deployment ID. Habilita Apps Script API en Google Cloud. La API de ejecución requiere que ambas aplicaciones compartan el mismo proyecto Cloud.
+
+PASO 5. CONECTAR
+Abre tu aplicación publicada por HTTPS y entra en Ajustes > Sincronización privada con Google Sheets. Pega OAuth Client ID y Script ID. Pulsa «Conectar Google» e inicia sesión con LA MISMA cuenta que creó la hoja y script. Si el acceso tiene advertencia de app no verificada, revisa que estés usando un proyecto propio en modo pruebas y entiendas los permisos antes de continuar.
+
+PASO 6. PRIMERA COPIA
+En el primer equipo, importa el respaldo anterior y revisa que todo esté correcto. En «Sincronización» pulsa «Subir mis datos» para crear la primera revisión en Sheets. En el celular abre la MISMA URL HTTPS, instala la PWA desde el menú del navegador, configura los IDs, conecta la misma cuenta Google y pulsa «Cargar nube».
+
+USO DIARIO
+Cada cambio se guarda primero localmente y luego se intenta enviar a Sheets. Observa el estado «Sincronizado». La PWA abre sin conexión si está cacheada, pero sin Internet NO sincroniza. Evita trabajar en dos dispositivos simultáneamente si aparece conflicto. En un conflicto, exporta respaldo local y compara antes de usar «Cargar nube». No hay solución automática de conflictos ni edición simultánea transaccional a nivel de UI.
+
+LÍMITES Y SEGURIDAD
+- La nube está protegida por la cuenta de Google y los permisos de Sheets y de Apps Script. El token OAuth vive solo en memoria: tendrás que volver a iniciar sesión cuando caduque.
+- Los datos locales de esta PWA NO están cifrados. Usa bloqueo de pantalla y no compartas el dispositivo.
+- Las fotos incorporadas como Data URL pueden aumentar el tamaño del respaldo; el backend admite hasta 4 MB de JSON por versión. Mantén respaldos externos.
+- La configuración puede requerir ajustes en el proyecto de Google debido a cambios de interfaz o de políticas OAuth.
+- Esta versión NO incorpora notificaciones push ni tienda de clientes. Tampoco realiza sincronización automática antes de completar los pasos.
+
+DOCUMENTACIÓN OFICIAL
+https://developers.google.com/apps-script/api/how-tos/execute
+https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Making_PWAs_installable
